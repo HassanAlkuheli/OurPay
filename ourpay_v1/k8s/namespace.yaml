@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ourpay
+  labels:
+    name: ourpay
+    app: payment-api

@@ -1,0 +1,98 @@
+name: Payment API CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_USER: test_user
+          POSTGRES_DB: payment_test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+          
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+          
+      rabbitmq:
+        image: rabbitmq:3-management
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 30s
+          --health-timeout 30s
+          --health-retries 3
+        ports:
+          - 5672:5672
+          - 15672:15672
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+        
+    - name: Restore dependencies
+      run: |
+        cd ourpay_v1
+        dotnet restore PaymentApi.csproj
+        dotnet restore Tests/PaymentApi.Tests.csproj
+        
+    - name: Build
+      run: |
+        cd ourpay_v1
+        dotnet build PaymentApi.csproj --no-restore --configuration Release
+        dotnet build Tests/PaymentApi.Tests.csproj --no-restore --configuration Release
+        
+    - name: Run Unit Tests
+      run: |
+        cd ourpay_v1
+        dotnet test Tests/PaymentApi.Tests.csproj --no-build --configuration Release --filter "Category!=Integration" --logger trx --collect:"XPlat Code Coverage"
+        
+    - name: Run Integration Tests
+      run: |
+        cd ourpay_v1
+        dotnet test Tests/PaymentApi.Tests.csproj --no-build --configuration Release --filter "Category=Integration" --logger trx --collect:"XPlat Code Coverage"
+      env:
+        ConnectionStrings__DefaultConnection: "Server=localhost;Database=payment_test_db;User Id=test_user;Password=test_password;"
+        RedisSettings__ConnectionString: "localhost:6379"
+        RabbitMQSettings__HostName: "localhost"
+        
+    - name: Upload coverage reports to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        directory: ./ourpay_v1/Tests/TestResults
+        fail_ci_if_error: false
+        
+    - name: Publish Test Results
+      uses: dorny/test-reporter@v1
+      if: success() || failure()
+      with:
+        name: .NET Tests
+        path: ./ourpay_v1/Tests/TestResults/*.trx
+        reporter: dotnet-trx
