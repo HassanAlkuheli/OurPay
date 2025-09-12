@@ -1,134 +1,278 @@
-using Microsoft.AspNetCore.Mvc;
-using System.ComponentModel.DataAnnotations;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Identity;
+using PaymentApi.Configuration;
+using PaymentApi.Data;
+using PaymentApi.Middleware;
+using PaymentApi.Models;
+using PaymentApi.Repositories;
+using PaymentApi.Services;
+using Serilog;
+using StackExchange.Redis;
+using System.Security.Claims;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services
+// Configure Kestrel limits first
+var kestrelLimits = builder.Configuration.GetSection(KestrelLimitSettings.SectionName).Get<KestrelLimitSettings>() ?? new KestrelLimitSettings();
+builder.Services.Configure<KestrelServerOptions>(options =>
+{
+    options.Limits.MaxConcurrentConnections = kestrelLimits.MaxConcurrentConnections;
+    options.Limits.MaxConcurrentUpgradedConnections = kestrelLimits.MaxConcurrentUpgradedConnections;
+    options.Limits.MaxRequestBodySize = kestrelLimits.MaxRequestBodySize;
+    options.Limits.MaxRequestBufferSize = kestrelLimits.MaxRequestBufferSize;
+    options.Limits.MaxRequestHeaderCount = kestrelLimits.MaxRequestHeaderCount;
+    options.Limits.MaxRequestHeadersTotalSize = kestrelLimits.MaxRequestHeadersTotalSize;
+    options.Limits.KeepAliveTimeout = TimeSpan.FromMinutes(kestrelLimits.KeepAliveTimeoutMinutes);
+    options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(kestrelLimits.RequestHeadersTimeoutSeconds);
+});
+
+// Configure Serilog
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .WriteTo.Console()
+    .WriteTo.File("logs/payment-api-.log", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+
+// Add services to the container
 builder.Services.AddControllers();
+
+// Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo 
+    { 
+        Title = "Payment API", 
+        Version = "v1",
+        Description = "A comprehensive Payment by Link API"
+    });
+    
+    // Add JWT authentication to Swagger
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme (Example: 'Bearer 12345abcdef')",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+    
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            Array.Empty<string>()
+        }
+    });
+});
+
+// Configuration sections
+var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+var redisSettings = builder.Configuration.GetSection(RedisSettings.SectionName).Get<RedisSettings>() ?? new RedisSettings();
+var rateLimitSettings = builder.Configuration.GetSection(RateLimitSettings.SectionName).Get<RateLimitSettings>() ?? new RateLimitSettings();
+var paymentSettings = builder.Configuration.GetSection(PaymentSettings.SectionName).Get<PaymentSettings>() ?? new PaymentSettings();
+var rabbitMQSettings = builder.Configuration.GetSection(RabbitMQSettings.SectionName).Get<RabbitMQSettings>() ?? new RabbitMQSettings();
+var webhookSettings = builder.Configuration.GetSection(WebhookSettings.SectionName).Get<WebhookSettings>() ?? new WebhookSettings();
+var throughputLimitSettings = builder.Configuration.GetSection(ThroughputLimitSettings.SectionName).Get<ThroughputLimitSettings>() ?? new ThroughputLimitSettings();
+var kestrelLimitSettings = builder.Configuration.GetSection(KestrelLimitSettings.SectionName).Get<KestrelLimitSettings>() ?? new KestrelLimitSettings();
+
+builder.Services.AddSingleton(jwtSettings);
+builder.Services.AddSingleton(redisSettings);
+builder.Services.AddSingleton(rateLimitSettings);
+builder.Services.AddSingleton(paymentSettings);
+builder.Services.AddSingleton(rabbitMQSettings);
+builder.Services.AddSingleton(webhookSettings);
+builder.Services.AddSingleton(throughputLimitSettings);
+builder.Services.AddSingleton(kestrelLimitSettings);
+builder.Services.AddSingleton(webhookSettings);
+
+// Database - Use SQLite for development, PostgreSQL for production
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") ?? "";
+builder.Services.AddDbContext<PaymentDbContext>(options =>
+{
+    if (connectionString.Contains("Data Source"))
+    {
+        // SQLite for local development
+        options.UseSqlite(connectionString);
+    }
+    else
+    {
+        // PostgreSQL for production
+        options.UseNpgsql(connectionString);
+    }
+});
+
+// Identity configuration
+builder.Services.AddIdentity<User, IdentityRole<Guid>>(options =>
+{
+    // Password settings
+    options.Password.RequireDigit = true;
+    options.Password.RequireLowercase = true;
+    options.Password.RequireNonAlphanumeric = false;
+    options.Password.RequireUppercase = true;
+    options.Password.RequiredLength = 6;
+    
+    // User settings
+    options.User.AllowedUserNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._@+";
+    options.User.RequireUniqueEmail = true;
+})
+.AddEntityFrameworkStores<PaymentDbContext>()
+.AddDefaultTokenProviders();
+
+// JWT Authentication
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtSettings.Issuer,
+        ValidAudience = jwtSettings.Audience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSettings.SecretKey)),
+        ClockSkew = TimeSpan.Zero,
+        RoleClaimType = ClaimTypes.Role,
+        NameClaimType = ClaimTypes.NameIdentifier
+    };
+});
+
+builder.Services.AddAuthorization();
+
+// Redis - Disabled for testing
+// builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
+//     ConnectionMultiplexer.Connect(redisSettings.ConnectionString));
+
+// RabbitMQ - Disabled for testing  
+// builder.Services.AddSingleton<IRabbitMQService, RabbitMQService>();
+
+// HTTP Client for webhooks
+builder.Services.AddHttpClient();
+
+// AutoMapper
+builder.Services.AddAutoMapper(typeof(MappingProfile));
+
+// Repository pattern
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+builder.Services.AddScoped<IUserRepository, UserRepository>();
+builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
+builder.Services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+builder.Services.AddScoped<IWebhookRepository, WebhookRepository>();
+builder.Services.AddScoped<IWebhookEventRepository, WebhookEventRepository>();
+builder.Services.AddScoped<IWebhookDeliveryAttemptRepository, WebhookDeliveryAttemptRepository>();
+
+// Services
+builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IPaymentService, PaymentService>();
+// builder.Services.AddScoped<IWebhookService, WebhookService>(); // Disabled - uses RabbitMQ
+builder.Services.AddScoped<IWebhookService, MockWebhookService>(); // Mock for testing
+builder.Services.AddScoped<ITokenService, TokenService>();
+builder.Services.AddScoped<ICacheService, MockCacheService>(); // Mock for testing
+builder.Services.AddScoped<IAuditService, AuditService>();
+
+// Background services
+// builder.Services.AddHostedService<WebhookBackgroundService>();
+
+// CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy.AllowAnyOrigin()
+              .AllowAnyMethod()
+              .AllowAnyHeader();
+    });
+});
 
 var app = builder.Build();
 
-// Configure pipeline
-if (app.Environment.IsDevelopment() || app.Environment.IsProduction())
+// Configure the HTTP request pipeline
+if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment API V1");
+    });
+}
+else
+{
+    // Enable Swagger in production for testing purposes
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Payment API V1");
+        c.RoutePrefix = ""; // Make Swagger available at root
+    });
 }
 
-app.UseRouting();
+// Only use HTTPS redirection in production with proper SSL setup
+// Disabled for development and containerized environments
+// if (!app.Environment.IsDevelopment())
+// {
+//     app.UseHttpsRedirection();
+// }
+
+app.UseCors("AllowAll");
+
+// Custom middleware - temporarily disabled for debugging
+// app.UseMiddleware<ErrorHandlingMiddleware>();
+// app.UseMiddleware<ThroughputLimitMiddleware>();
+// app.UseMiddleware<RateLimitMiddleware>(); // Disabled - uses Redis
+
+app.UseAuthentication();
+app.UseAuthorization();
+
 app.MapControllers();
 
-// Simple API endpoints for testing
-app.MapGet("/", () => new { 
-    message = "🚀 OurPay API - Global Access Ready!", 
-    version = "1.0.0",
-    timestamp = DateTime.UtcNow,
-    status = "online"
-});
-
-app.MapGet("/health", () => new { 
-    status = "healthy", 
-    timestamp = DateTime.UtcNow,
-    server = "Oracle Cloud ARM64"
-});
-
-app.MapPost("/api/v1/auth/register", ([FromBody] RegisterRequest request) => {
-    // Simulate registration
-    if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Password))
+// Initialize database with proper error handling
+using (var scope = app.Services.CreateScope())
+{
+    var context = scope.ServiceProvider.GetRequiredService<PaymentDbContext>();
+    
+    try
     {
-        return Results.BadRequest(new { error = "Email and password required" });
+        context.Database.EnsureCreated();
+        Log.Information("Database initialized successfully");
     }
-    
-    return Results.Ok(new { 
-        message = "Registration successful!",
-        userId = Guid.NewGuid(),
-        email = request.Email,
-        role = request.Role ?? "customer",
-        timestamp = DateTime.UtcNow
-    });
-});
-
-app.MapPost("/api/v1/auth/login", ([FromBody] LoginRequest request) => {
-    // Simulate login
-    if (string.IsNullOrEmpty(request.Email) || string.IsNullOrEmpty(request.Password))
+    catch (Exception ex)
     {
-        return Results.BadRequest(new { error = "Email and password required" });
+        Log.Error(ex, "An error occurred while creating the database");
+        // Don't crash the app if database fails in container
     }
-    
-    var token = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{request.Email}:{DateTime.UtcNow.Ticks}"));
-    
-    return Results.Ok(new { 
-        message = "Login successful!",
-        accessToken = token,
-        refreshToken = Guid.NewGuid().ToString(),
-        expiresIn = 900, // 15 minutes
-        tokenType = "Bearer",
-        timestamp = DateTime.UtcNow
-    });
-});
+}
 
-app.MapPost("/api/v1/payments", ([FromBody] PaymentRequest request) => {
-    // Simulate payment creation
-    var paymentId = Guid.NewGuid();
-    
-    return Results.Ok(new { 
-        message = "Payment link created successfully!",
-        paymentId = paymentId,
-        amount = request.Amount,
-        currency = request.Currency ?? "USD",
-        description = request.Description ?? "Payment",
-        paymentLink = $"https://newer-rotation-disappointed-musical.trycloudflare.com/pay/{paymentId}",
-        status = "pending",
-        expiresAt = DateTime.UtcNow.AddHours(24),
-        timestamp = DateTime.UtcNow
-    });
-});
+try
+{
+    Log.Information("Starting API server on http://localhost:5262");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application startup failed");
+    Console.WriteLine($"Error: {ex.Message}");
+    Console.WriteLine($"Stack: {ex.StackTrace}");
+    throw;
+}
 
-app.MapPost("/api/v1/payments/{id}/confirm", (string id, [FromBody] ConfirmPaymentRequest request) => {
-    // Simulate payment confirmation
-    return Results.Ok(new { 
-        message = "Payment confirmed successfully!",
-        paymentId = id,
-        status = "completed",
-        amount = request.Amount ?? 100.00m,
-        transactionId = Guid.NewGuid(),
-        timestamp = DateTime.UtcNow
-    });
-});
-
-app.MapGet("/api/v1/payments", () => {
-    // Return sample payments
-    return Results.Ok(new { 
-        payments = new[] {
-            new { 
-                id = Guid.NewGuid(),
-                amount = 50.00m,
-                currency = "USD",
-                status = "completed",
-                createdAt = DateTime.UtcNow.AddHours(-2)
-            },
-            new { 
-                id = Guid.NewGuid(),
-                amount = 75.50m,
-                currency = "USD", 
-                status = "pending",
-                createdAt = DateTime.UtcNow.AddMinutes(-30)
-            }
-        },
-        totalCount = 2
-    });
-});
-
-Console.WriteLine("🚀 OurPay API starting...");
-Console.WriteLine("🌍 Global access via Cloudflare Tunnel");
-Console.WriteLine("📱 Mobile-friendly endpoints ready");
-
-app.Run();
-
-// DTOs
-public record RegisterRequest(string Email, string Password, string? Role);
-public record LoginRequest(string Email, string Password);
-public record PaymentRequest(decimal Amount, string? Currency, string? Description);
-public record ConfirmPaymentRequest(decimal? Amount);
+// Make the Program class accessible for testing
+public partial class Program { }
