@@ -1,4 +1,64 @@
-# OurPay Payment API - Tech Stack Documentation
+# 💳 OurPay Payment API - Tech Stack Documentation
+
+<div align="center">
+
+![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge&logo=dotnet)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-336791?style=for-the-badge&logo=postgresql&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-326CE5?style=for-the-badge&logo=kubernetes&logoColor=white)
+
+**Enterprise-grade Payment Processing API with Advanced Security & Scalability**
+
+📚 [Full Documentation](https://github.com/HassanAlkuheli/paymentAPI) • 🚀 [GitHub Repository](https://github.com/HassanAlkuheli/paymentAPI.git) • 📋 [API Reference](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/README.md)
+
+</div>
+
+---
+
+## 🎯 **Repository Links**
+
+- **🏠 Main Repository**: https://github.com/HassanAlkuheli/paymentAPI
+- **📖 Complete API Documentation**: [ourpay_v1/README.md](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/README.md)
+- **🔧 Tech Stack Details**: [TECH-STACK.md](https://github.com/HassanAlkuheli/paymentAPI/blob/master/TECH-STACK.md)
+- **🐳 Docker Setup**: [docker-compose.yml](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/docker-compose.yml)
+- **☸️ Kubernetes Manifests**: [k8s/](https://github.com/HassanAlkuheli/paymentAPI/tree/master/ourpay_v1/k8s)
+
+## 🏗️ **Architecture Overview**
+
+```mermaid
+graph TB
+    Client[Client Applications] --> LB[Load Balancer]
+    LB --> API1[PaymentAPI Pod 1]
+    LB --> API2[PaymentAPI Pod 2]
+    LB --> API3[PaymentAPI Pod N]
+    
+    API1 --> Redis[(Redis Cache)]
+    API2 --> Redis
+    API3 --> Redis
+    
+    API1 --> PostgresDB[(PostgreSQL)]
+    API2 --> PostgresDB
+    API3 --> PostgresDB
+    
+    API1 --> RabbitMQ[RabbitMQ]
+    API2 --> RabbitMQ
+    API3 --> RabbitMQ
+    
+    RabbitMQ --> Webhooks[Webhook Services]
+    
+    subgraph "Security Layer"
+        JWT[JWT Authentication]
+        RateLimit[Rate Limiting]
+        Audit[Audit Logging]
+    end
+    
+    subgraph "Monitoring"
+        Health[Health Checks]
+        Logs[Structured Logging]
+        Metrics[Performance Metrics]
+    end
+```
 
 ## 🏗️ Core Architecture
 
@@ -322,3 +382,74 @@ ourpay_v1/
 **Total Stack Coverage: 95% Complete** 
 
 The OurPay Payment API represents a comprehensive, enterprise-ready payment processing system with full development, testing, monitoring, and deployment capabilities across multiple environments (local, Docker, Kubernetes, cloud).
+
+## 🌟 **Project Showcase**
+
+### **Live Repository**
+🔗 **GitHub**: https://github.com/HassanAlkuheli/paymentAPI
+
+### **Technology Stack Visualization**
+```mermaid
+graph LR
+    subgraph "Frontend Layer"
+        UI[Mobile/Web Apps]
+    end
+    
+    subgraph "API Layer"
+        API[.NET 8 PaymentAPI]
+        Auth[JWT Auth Service]
+        Payment[Payment Service]
+    end
+    
+    subgraph "Data Layer"
+        PG[(PostgreSQL)]
+        Redis[(Redis Cache)]
+        RMQ[RabbitMQ]
+    end
+    
+    subgraph "Infrastructure"
+        Docker[Docker Containers]
+        K8s[Kubernetes Cluster]
+        Cloud[Oracle Cloud]
+    end
+    
+    UI --> API
+    API --> Auth
+    API --> Payment
+    Payment --> PG
+    API --> Redis
+    API --> RMQ
+    
+    API --> Docker
+    Docker --> K8s
+    K8s --> Cloud
+    
+    style API fill:#512BD4
+    style PG fill:#336791
+    style Redis fill:#DC382D
+    style K8s fill:#326CE5
+```
+
+### **Key Features Showcase**
+- 🔐 **Enterprise Security**: JWT with refresh tokens, role-based access, rate limiting
+- ⚡ **High Performance**: Redis caching, async processing, connection pooling
+- 🚀 **Cloud Native**: Docker, Kubernetes, health checks, auto-scaling
+- 🔄 **Event Driven**: RabbitMQ messaging, webhook processing
+- 📊 **Observability**: Structured logging, health monitoring, audit trails
+- 🧪 **Testing Ready**: Unit tests, integration tests, load testing tools
+
+### **Quick Start Links**
+- 📖 [Complete Setup Guide](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/README.md#-quick-start)
+- 🐳 [Docker Deployment](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/docker-compose.yml)
+- ☸️ [Kubernetes Manifests](https://github.com/HassanAlkuheli/paymentAPI/tree/master/ourpay_v1/k8s)
+- 🔧 [Configuration Guide](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/README.md#-configuration)
+
+---
+
+<div align="center">
+
+**⭐ Star the repository if you find it useful!**
+
+[🚀 View on GitHub](https://github.com/HassanAlkuheli/paymentAPI) • [📋 Documentation](https://github.com/HassanAlkuheli/paymentAPI/blob/master/ourpay_v1/README.md) • [🐛 Report Issues](https://github.com/HassanAlkuheli/paymentAPI/issues)
+
+</div>
