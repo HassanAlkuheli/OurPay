@@ -437,6 +437,55 @@ Load Balancing:
 
 ## 📈 **Monitoring & Observability**
 
+### **Complete LGTM Stack**
+```yaml
+Grafana (3000):           # Unified dashboards & alerting
+  - Logs correlation
+  - Traces visualization  
+  - Metrics monitoring
+  - Continuous profiling
+
+Prometheus (9090):        # Metrics collection
+  - Application metrics
+  - Infrastructure monitoring
+  - Custom business metrics
+
+Loki (3100):             # Log aggregation
+  - Structured log storage
+  - Log-to-trace correlation
+  - Full-text search
+
+Tempo (3200):            # Distributed tracing
+  - ✅ FIXED: Single-node configuration resolves "empty ring" error
+  - TraceQL query support
+  - Trace-to-logs correlation
+  - Trace-to-profiles correlation
+
+Pyroscope (4040):        # 🆕 Continuous profiling
+  - CPU profiling
+  - Memory allocation tracking
+  - Code-level performance analysis
+  - Correlation with traces
+```
+
+### **🆕 Enhanced Observability Features**
+
+**🔍 Distributed Tracing (Fixed)**
+- Tempo now uses single-node configuration for development
+- Eliminates "empty ring" errors in TraceQL queries
+- Full request lifecycle tracking across services
+
+**⚡ Continuous Profiling (New)**
+- Real-time CPU and memory profiling with Pyroscope
+- Code-level performance insights
+- Integration with distributed traces
+- Zero-overhead profiling in production
+
+**📊 Unified Correlation**
+- Jump from logs → traces → profiles seamlessly
+- Service map visualization with performance data
+- Root cause analysis with complete context
+
 ### **Health Checks**
 ```http
 GET /health                    # Overall health
@@ -466,6 +515,17 @@ GET /health/live              # Liveness probe
 - Redis cache hit/miss ratios
 - RabbitMQ queue depths
 - JWT token validation rates
+- **🆕 Continuous profiling metrics (CPU, memory allocation)**
+
+### **Access Monitoring Services**
+```bash
+# After running docker-compose up -d
+Grafana:    http://localhost:3000    (admin/admin)
+Prometheus: http://localhost:9090
+Loki:       http://localhost:3100
+Tempo:      http://localhost:3200
+Pyroscope:  http://localhost:4040    # 🆕 Continuous profiling UI
+```
 
 ## 🧪 **Testing**
 

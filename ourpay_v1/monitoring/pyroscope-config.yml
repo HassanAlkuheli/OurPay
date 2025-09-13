@@ -1,0 +1,38 @@
+log:
+  level: info
+
+server:
+  http-listen-port: 4040
+
+analytics:
+  reporting-disabled: true
+
+pyroscopedb:
+  data-path: /var/lib/pyroscope
+
+targets:
+  - job-name: "paymentapi"
+    enabled-profiles: [cpu, alloc_objects, alloc_space, inuse_objects, inuse_space]
+    targets:
+      - localhost:4040
+    labels:
+      service: "paymentapi"
+      environment: "development"
+
+scrape-configs:
+  - job-name: dotnet-pull
+    enabled-profiles: [cpu, alloc_objects, alloc_space, inuse_objects, inuse_space]
+    static-configs:
+      - targets: ['paymentapi:4040']
+        labels:
+          service: paymentapi
+          environment: development
+          __name__: process_cpu
+    scrape-interval: 15s
+    scrape-timeout: 10s
+    scheme: http
+    profiling-config:
+      pprof-config:
+        delta: false
+        mutex: true
+        block: true

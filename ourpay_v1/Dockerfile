@@ -1,57 +1,43 @@
-# Build stage - Use standard image for faster build
+# Use the official .NET 8.0 SDK image for building
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+WORKDIR /src
+
+# Copy csproj and restore dependencies
+COPY PaymentApi.csproj .
+RUN dotnet restore
+
+# Copy the rest of the source code
+COPY . .
+
+# Build the application
+RUN dotnet build -c Release -o /app/build
+
+# Publish the application
+RUN dotnet publish -c Release -o /app/publish
+
+# Use the official .NET 8.0 runtime image for running
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-# Copy only project file first for better caching
-COPY PaymentApi.csproj ./
-RUN dotnet restore --no-cache
+# Install curl for health checks
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
-# Copy source code in optimized order
-COPY Program.cs ./
-COPY appsettings*.json ./
-COPY Configuration/ ./Configuration/
-COPY Controllers/ ./Controllers/
-COPY Data/ ./Data/
-COPY DTOs/ ./DTOs/
-COPY Middleware/ ./Middleware/
-COPY Models/ ./Models/
-COPY Repositories/ ./Repositories/
-COPY Services/ ./Services/
+# Copy the published application
+COPY --from=build /app/publish .
 
-# Build with optimizations
-RUN dotnet publish -c Release -o out --no-restore \
-    -p:DebugType=None \
-    -p:DebugSymbols=false
+# Create logs directory
+RUN mkdir -p /app/logs
 
-# Runtime stage - Use minimal Alpine image
-FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine
-WORKDIR /app
-
-# Install curl for health checks and create non-root user
-RUN apk add --no-cache curl && \
-    adduser -D -h /app appuser && \
-    chown -R appuser:appuser /app
-
-# Copy application with proper ownership
-COPY --from=build --chown=appuser:appuser /app/out .
-
-# Switch to non-root user
-USER appuser
-
-# Set optimized environment variables for smaller footprint
-ENV ASPNETCORE_URLS=http://+:80 \
-    ASPNETCORE_ENVIRONMENT=Production \
-    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
-    DOTNET_USE_POLLING_FILE_WATCHER=1 \
-    DOTNET_RUNNING_IN_CONTAINER=true \
-    COMPlus_EnableDiagnostics=0 \
-    DOTNET_EnableDiagnostics=0 \
-    DOTNET_CLI_TELEMETRY_OPTOUT=1
-
+# Expose port 80
 EXPOSE 80
 
-# Lightweight health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost/health || exit 1
+# Set environment variables
+ENV ASPNETCORE_ENVIRONMENT=Development
+ENV ASPNETCORE_URLS=http://+:80
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:80/health || exit 1
+
+# Start the application
 ENTRYPOINT ["dotnet", "PaymentApi.dll"]

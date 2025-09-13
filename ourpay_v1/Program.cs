@@ -14,6 +14,11 @@ using Serilog;
 using StackExchange.Redis;
 using System.Security.Claims;
 using System.Text;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Logs;
+using Prometheus;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -39,6 +44,38 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 
 builder.Host.UseSerilog();
+
+// Configure OpenTelemetry
+builder.Services.AddOpenTelemetry()
+    .ConfigureResource(resource => resource
+        .AddService(serviceName: "paymentapi", serviceVersion: "1.0.0")
+        .AddAttributes(new Dictionary<string, object>
+        {
+            ["deployment.environment"] = builder.Environment.EnvironmentName,
+            ["service.instance.id"] = Environment.MachineName
+        }))
+    .WithTracing(tracing => tracing
+        .AddAspNetCoreInstrumentation(options =>
+        {
+            options.RecordException = true;
+            options.EnrichWithHttpRequest = (activity, httpRequest) =>
+            {
+                activity.SetTag("http.request.body.size", httpRequest.ContentLength);
+            };
+            options.EnrichWithHttpResponse = (activity, httpResponse) =>
+            {
+                activity.SetTag("http.response.body.size", httpResponse.ContentLength);
+            };
+        })
+        .AddHttpClientInstrumentation()
+        .AddEntityFrameworkCoreInstrumentation()
+        .AddOtlpExporter(options =>
+        {
+            options.Endpoint = new Uri("http://tempo:4317");
+        }))
+    .WithMetrics(metrics => metrics
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation());
 
 // Add services to the container
 builder.Services.AddControllers();
@@ -158,12 +195,20 @@ builder.Services.AddAuthentication(options =>
 
 builder.Services.AddAuthorization();
 
-// Redis - Disabled for testing
-// builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
-//     ConnectionMultiplexer.Connect(redisSettings.ConnectionString));
+// Redis - Enable for Docker environment
+if (builder.Environment.EnvironmentName == "Docker" || 
+    builder.Configuration.GetValue<string>("RedisSettings:ConnectionString")?.Contains("redis") == true)
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(provider =>
+        ConnectionMultiplexer.Connect(redisSettings.ConnectionString));
+}
 
-// RabbitMQ - Disabled for testing  
-// builder.Services.AddSingleton<IRabbitMQService, RabbitMQService>();
+// RabbitMQ - Enable for Docker environment
+if (builder.Environment.EnvironmentName == "Docker" || 
+    builder.Configuration.GetValue<string>("RabbitMQSettings:HostName")?.Contains("rabbitmq") == true)
+{
+    builder.Services.AddSingleton<IRabbitMQService, RabbitMQService>();
+}
 
 // HTTP Client for webhooks
 builder.Services.AddHttpClient();
@@ -183,14 +228,29 @@ builder.Services.AddScoped<IWebhookDeliveryAttemptRepository, WebhookDeliveryAtt
 // Services
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
-// builder.Services.AddScoped<IWebhookService, WebhookService>(); // Disabled - uses RabbitMQ
-builder.Services.AddScoped<IWebhookService, MockWebhookService>(); // Mock for testing
+
+// Webhook and Cache services - Use real services in Docker, mocks otherwise
+if (builder.Environment.EnvironmentName == "Docker" || 
+    builder.Configuration.GetValue<string>("RabbitMQSettings:HostName")?.Contains("rabbitmq") == true)
+{
+    builder.Services.AddScoped<IWebhookService, WebhookService>();
+    builder.Services.AddScoped<ICacheService, CacheService>();
+}
+else
+{
+    builder.Services.AddScoped<IWebhookService, MockWebhookService>();
+    builder.Services.AddScoped<ICacheService, MockCacheService>();
+}
+
 builder.Services.AddScoped<ITokenService, TokenService>();
-builder.Services.AddScoped<ICacheService, MockCacheService>(); // Mock for testing
 builder.Services.AddScoped<IAuditService, AuditService>();
 
-// Background services
-// builder.Services.AddHostedService<WebhookBackgroundService>();
+// Background services - Enable for Docker environment
+if (builder.Environment.EnvironmentName == "Docker" || 
+    builder.Configuration.GetValue<string>("RabbitMQSettings:HostName")?.Contains("rabbitmq") == true)
+{
+    builder.Services.AddHostedService<WebhookBackgroundService>();
+}
 
 // CORS
 builder.Services.AddCors(options =>
@@ -241,6 +301,10 @@ app.UseCors("AllowAll");
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// Add Prometheus metrics endpoint
+app.UseHttpMetrics();
+app.MapMetrics();
 
 app.MapControllers();
 
